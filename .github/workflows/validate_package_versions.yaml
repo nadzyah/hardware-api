@@ -1,0 +1,53 @@
+name: Test client lib and CLI tool
+on:
+  push:
+    branches: [ main ]
+    tags: ["v*.*.*"]
+    paths:
+      - client/**
+      - Cargo.*
+      - ".github/workflows/validate_package_versions.yaml"
+
+jobs:
+  validate-version:
+    runs-on: [self-hosted, linux, large, jammy, x64]
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkgconf libssl-dev build-essential jq
+      - uses: actions-rs/toolchain@v1
+      - name: Get version from git tag
+        id: git_version
+        run: |
+          VERSION=$(git describe --tags --match 'v*.*.*' --dirty)
+          if [[ $VERSION == *-dirty ]]; then
+            echo "Version includes -dirty. Ensure working tree is clean before building."
+            exit 1
+          fi
+          # Remove 'v' prefix from the Git version
+          TAG_VERSION=${GIT_VERSION#"v"}
+          echo "GIT_VERSION=$TAG_VERSION" >> $GITHUB_ENV
+          echo "Git tag version: $TAG_VERSION"
+      - name: Check hwlib and hwctl Cargo versions
+        run: |
+          echo "Using Git tag version: ${{ env.GIT_VERSION }}"
+          for manifest in hwlib/Cargo.toml hwctl/Cargo.toml; do
+            CARGO_VERSION=$(cargo metadata --manifest-path "$manifest" --no-deps --format-version 1 | jq -r '.packages[0].version')
+            if [[ $CARGO_VERSION != ${{ env.GIT_VERSION }} ]]; then
+              echo "Version mismatch in $manifest: $CARGO_VERSION (expected ${{ env.GIT_VERSION }})"
+              exit 1
+            fi
+          done
+      - name: Check Debian changelog version
+        run: |
+          echo "Using Git tag version: ${{ env.GIT_VERSION }}"
+          DEBIAN_VERSION=$(dpkg-parsechangelog --show-field Version | cut -d'~' -f1)
+          if [[ $DEBIAN_VERSION != ${{ env.GIT_VERSION }} ]]; then
+            echo "Debian changelog version mismatch: $DEBIAN_VERSION (expected ${{ env.GIT_VERSION }})"
+            exit 1
+          fi
